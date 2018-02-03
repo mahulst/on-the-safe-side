@@ -6,6 +6,7 @@ import Html.Attributes exposing (width, height, style)
 import Math.Matrix4 as Mat4 exposing (Mat4)
 import Math.Vector2 as Vec2 exposing (Vec2, vec2)
 import Math.Vector3 as Vec3 exposing (Vec3, vec3)
+import Mouse
 import Task exposing (Task)
 import Time exposing (Time)
 import WebGL exposing (Mesh, Shader, Entity)
@@ -15,6 +16,7 @@ import WebGL.Texture as Texture exposing (Texture, defaultOptions, Error)
 type alias Model =
     { texture : Maybe Texture
     , progress : Float
+    , spindleRotation : Float
     }
 
 
@@ -30,6 +32,9 @@ main =
 
 type Msg
     = Tick Time
+    | MouseDown Mouse.Position
+    | MouseUp Mouse.Position
+    | MouseMove Mouse.Position
     | TextureError Error
     | TextureLoaded Texture
 
@@ -38,6 +43,9 @@ subscriptions : Model -> Sub Msg
 subscriptions _ =
     Sub.batch
         [ (AnimationFrame.diffs Tick)
+        , Mouse.downs MouseDown
+        , Mouse.ups MouseUp
+        , Mouse.moves MouseMove
         ]
 
 
@@ -45,6 +53,7 @@ init : ( Model, Cmd Msg )
 init =
     ( { texture = Nothing
       , progress = 0
+      , spindleRotation = 0
       }
     , Cmd.batch
         [ fetchTexture
@@ -67,6 +76,15 @@ update action model =
                     calcNewProgress dt model.progress
             in
                 ( { model | progress = model.progress }, Cmd.none )
+
+        MouseDown pos ->
+            ( model, Cmd.none )
+
+        MouseUp pos ->
+            ( model, Cmd.none )
+
+        MouseMove pos ->
+            ( model, Cmd.none )
 
 
 calcNewProgress : Float -> Float -> Float
@@ -180,6 +198,7 @@ view { texture, progress } =
                 ]
                 [ toEntity progress faceMesh safeTexture
                 , toEntity progress sidesMesh safeTexture
+                , spindleEntity
                 ]
 
         Nothing ->
@@ -253,4 +272,78 @@ fragmentShader =
           gl_FragColor = texture2D(texture, vcoord);
         }
 
+    |]
+
+
+spindleEntity =
+    WebGL.entity
+        spindleVertexShader
+        spindleFragmentShader
+        spindleMesh
+        { perspective = spindlePerspective
+        , rotation = Mat4.makeRotate 5 (vec3 0 0 1)
+        , offset =
+            vec3 0 -1 0
+        }
+
+
+spindlePerspective : Mat4
+spindlePerspective =
+    Mat4.mul
+        (Mat4.makePerspective 45 1 0.01 100)
+        (Mat4.makeLookAt (vec3 0 0 1) (vec3 0 0 0) (vec3 0 1 0))
+
+
+type alias SpindleVertex =
+    { position : Vec3
+    }
+
+
+spindleMesh : Mesh SpindleVertex
+spindleMesh =
+    let
+        scale =
+            (Vec3.scale 0.2)
+    in
+        [ ( (vec3 -1 -1 0)
+          , (vec3 1 -1 0)
+          , (vec3 -1 1 0)
+          )
+        , ( (vec3 1 1 0)
+          , (vec3 1 -1 0)
+          , (vec3 -1 1 0)
+          )
+        ]
+            |> List.map (\( a, b, c ) -> ( scale a, scale b, scale c ))
+            |> List.map (\( a, b, c ) -> ( SpindleVertex a, SpindleVertex b, SpindleVertex c ))
+            |> WebGL.triangles
+
+
+type alias SpindleUniforms =
+    { perspective : Mat4
+    , offset : Vec3
+    , rotation : Mat4
+    }
+
+
+spindleVertexShader : Shader SpindleVertex SpindleUniforms {}
+spindleVertexShader =
+    [glsl|
+        attribute vec3 position;
+        uniform vec3 offset;
+        uniform mat4 rotation;
+        uniform mat4 perspective;
+        void main () {
+            gl_Position = perspective * vec4(position, 1.0) * rotation + vec4(offset, 1.0) ;
+        }
+    |]
+
+
+spindleFragmentShader : Shader {} SpindleUniforms {}
+spindleFragmentShader =
+    [glsl|
+        precision mediump float;
+        void main () {
+            gl_FragColor = vec4(1, 0.5, 0.5, 1.0);
+        }
     |]
