@@ -1,4 +1,4 @@
-module Main exposing (main)
+module Main exposing (main, updateCompleted)
 
 import AnimationFrame
 import Html exposing (Html, text)
@@ -11,6 +11,7 @@ import Task exposing (Task)
 import Time exposing (Time)
 import WebGL exposing (Mesh, Shader, Entity)
 import WebGL.Texture as Texture exposing (Texture, defaultOptions, Error)
+import List.Extra
 
 
 type alias Model =
@@ -18,6 +19,9 @@ type alias Model =
     , progress : Float
     , spindleRotation : Int
     , previousMousePos : Maybe Mouse.Position
+    , requestedCode : List Int
+    , codesCompleted : Int
+    , gameState : GameState
     }
 
 
@@ -29,6 +33,12 @@ main =
         , subscriptions = subscriptions
         , update = update
         }
+
+
+type GameState
+    = Playing
+    | Won
+    | Lost
 
 
 type Msg
@@ -56,6 +66,9 @@ init =
       , progress = 0
       , spindleRotation = 0
       , previousMousePos = Nothing
+      , requestedCode = [ 38, 12, 58, 45 ]
+      , codesCompleted = 0
+      , gameState = Playing
       }
     , Cmd.batch
         [ fetchTexture
@@ -76,14 +89,38 @@ update action model =
             let
                 progress =
                     calcNewProgress dt model.progress
+
+                gameState =
+                    if progress == 0 then
+                        Lost
+                    else
+                        model.gameState
             in
-                ( { model | progress = progress }, Cmd.none )
+                ( { model
+                    | progress =
+                        if model.gameState == Playing then
+                            progress
+                        else
+                            model.progress
+                    , gameState = gameState
+                  }
+                , Cmd.none
+                )
 
         MouseDown pos ->
             ( { model | previousMousePos = Just pos }, Cmd.none )
 
         MouseUp _ ->
-            ( { model | previousMousePos = Nothing }, Cmd.none )
+            ( { model
+                | previousMousePos = Nothing
+                , gameState =
+                    if model.codesCompleted == List.length model.requestedCode then
+                        Won
+                    else
+                        Playing
+              }
+            , Cmd.none
+            )
 
         MouseMove pos ->
             let
@@ -94,6 +131,9 @@ update action model =
                         )
                         model.previousMousePos
                         |> Maybe.withDefault model.spindleRotation
+
+                newCompleted =
+                    updateCompleted model.requestedCode newRotation model.spindleRotation model.codesCompleted
             in
                 ( { model
                     | spindleRotation = newRotation
@@ -106,9 +146,60 @@ update action model =
                                     previousPos
                             )
                             model.previousMousePos
+                    , codesCompleted = newCompleted
                   }
                 , Cmd.none
                 )
+
+
+updateCompleted : List Int -> Int -> Int -> Int -> Int
+updateCompleted list rotation previousRotation completed =
+    let
+        currentNeeded : Int
+        currentNeeded =
+            List.Extra.getAt completed list
+                |> Maybe.withDefault
+                    99
+
+        previousNeeded : Int
+        previousNeeded =
+            List.Extra.getAt (completed - 1) list
+                |> Maybe.withDefault
+                    99
+    in
+        case (currentNeeded == rotation) of
+            True ->
+                completed + 1
+
+            False ->
+                case rem completed 2 == 0 of
+                    True ->
+                        case rotation >= 0 && rotation < currentNeeded of
+                            True ->
+                                if rotation < previousRotation then
+                                    0
+                                else
+                                    completed
+
+                            False ->
+                                if rotation > previousRotation then
+                                    0
+                                else
+                                    completed
+
+                    False ->
+                        case rotation >= 0 && rotation < currentNeeded of
+                            True ->
+                                if rotation < previousRotation then
+                                    0
+                                else
+                                    completed
+
+                            False ->
+                                if rotation > previousRotation then
+                                    0
+                                else
+                                    completed
 
 
 calcNewSpindleRotation : Int -> Int -> Int -> Int
@@ -132,7 +223,7 @@ calcNewProgress : Float -> Float -> Float
 calcNewProgress dt progress =
     let
         newProgress =
-            progress + dt / 100
+            progress + dt / 400
 
         resetIfNeeded =
             if newProgress > 40 then
@@ -229,8 +320,8 @@ square =
 
 
 view : Model -> Html Msg
-view { texture, progress, spindleRotation } =
-    case texture of
+view model =
+    case model.texture of
         Just safeTexture ->
             Html.div []
                 [ WebGL.toHtml
@@ -238,15 +329,38 @@ view { texture, progress, spindleRotation } =
                     , height 1000
                     , style [ ( "display", "block" ) ]
                     ]
-                    [ toEntity progress faceMesh safeTexture
-                    , toEntity progress sidesMesh safeTexture
-                    , spindleEntity spindleRotation
+                    [ toEntity model.progress faceMesh safeTexture
+                    , toEntity model.progress sidesMesh safeTexture
+                    , spindleEntity model.spindleRotation
                     ]
-                , text (toString spindleRotation)
+                , Html.div [ Html.Attributes.class "spindleValue" ] [ text (toString model.spindleRotation) ]
+                , viewRequestedCode model.requestedCode model.codesCompleted
                 ]
 
         Nothing ->
             text "Loading textures..."
+
+
+viewRequestedCode : List Int -> Int -> Html Msg
+viewRequestedCode list completed =
+    Html.div
+        []
+        [ Html.div
+            [ Html.Attributes.class "requestedCode" ]
+            ([ text "Safe code: " ]
+                ++ (List.indexedMap
+                        (\index code ->
+                            Html.div
+                                [ Html.Attributes.classList
+                                    [ ( "done", index < completed )
+                                    ]
+                                ]
+                                [ text (toString code) ]
+                        )
+                        list
+                   )
+            )
+        ]
 
 
 toEntity : Float -> Mesh Vertex -> Texture -> Entity
