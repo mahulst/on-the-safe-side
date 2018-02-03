@@ -16,7 +16,8 @@ import WebGL.Texture as Texture exposing (Texture, defaultOptions, Error)
 type alias Model =
     { texture : Maybe Texture
     , progress : Float
-    , spindleRotation : Float
+    , spindleRotation : Int
+    , previousMousePos : Maybe Mouse.Position
     }
 
 
@@ -42,7 +43,7 @@ type Msg
 subscriptions : Model -> Sub Msg
 subscriptions _ =
     Sub.batch
-        [ (AnimationFrame.diffs Tick)
+        [ AnimationFrame.diffs Tick
         , Mouse.downs MouseDown
         , Mouse.ups MouseUp
         , Mouse.moves MouseMove
@@ -54,6 +55,7 @@ init =
     ( { texture = Nothing
       , progress = 0
       , spindleRotation = 0
+      , previousMousePos = Nothing
       }
     , Cmd.batch
         [ fetchTexture
@@ -75,16 +77,55 @@ update action model =
                 progress =
                     calcNewProgress dt model.progress
             in
-                ( { model | progress = model.progress }, Cmd.none )
+                ( { model | progress = progress }, Cmd.none )
 
         MouseDown pos ->
-            ( model, Cmd.none )
+            ( { model | previousMousePos = Just pos }, Cmd.none )
 
-        MouseUp pos ->
-            ( model, Cmd.none )
+        MouseUp _ ->
+            ( { model | previousMousePos = Nothing }, Cmd.none )
 
         MouseMove pos ->
-            ( model, Cmd.none )
+            let
+                newRotation =
+                    Maybe.map
+                        (\previousMousePos ->
+                            calcNewSpindleRotation pos.x previousMousePos.x model.spindleRotation
+                        )
+                        model.previousMousePos
+                        |> Maybe.withDefault model.spindleRotation
+            in
+                ( { model
+                    | spindleRotation = newRotation
+                    , previousMousePos =
+                        Maybe.map
+                            (\previousPos ->
+                                if model.spindleRotation /= newRotation then
+                                    pos
+                                else
+                                    previousPos
+                            )
+                            model.previousMousePos
+                  }
+                , Cmd.none
+                )
+
+
+calcNewSpindleRotation : Int -> Int -> Int -> Int
+calcNewSpindleRotation previousPos currentPos rotation =
+    let
+        newRotation =
+            rotation + ((previousPos - currentPos) // 10)
+
+        resetIfNeeded =
+            if rotation > 60 then
+                newRotation - 60
+            else if newRotation < 0 then
+                newRotation + 60
+            else
+                newRotation
+    in
+        resetIfNeeded
 
 
 calcNewProgress : Float -> Float -> Float
@@ -188,17 +229,20 @@ square =
 
 
 view : Model -> Html Msg
-view { texture, progress } =
+view { texture, progress, spindleRotation } =
     case texture of
         Just safeTexture ->
-            WebGL.toHtml
-                [ width 1000
-                , height 1000
-                , style [ ( "display", "block" ) ]
-                ]
-                [ toEntity progress faceMesh safeTexture
-                , toEntity progress sidesMesh safeTexture
-                , spindleEntity
+            Html.div []
+                [ WebGL.toHtml
+                    [ width 1000
+                    , height 1000
+                    , style [ ( "display", "block" ) ]
+                    ]
+                    [ toEntity progress faceMesh safeTexture
+                    , toEntity progress sidesMesh safeTexture
+                    , spindleEntity spindleRotation
+                    ]
+                , text (toString spindleRotation)
                 ]
 
         Nothing ->
@@ -275,13 +319,14 @@ fragmentShader =
     |]
 
 
-spindleEntity =
+spindleEntity : Int -> Entity
+spindleEntity rotation =
     WebGL.entity
         spindleVertexShader
         spindleFragmentShader
         spindleMesh
         { perspective = spindlePerspective
-        , rotation = Mat4.makeRotate 5 (vec3 0 0 1)
+        , rotation = Mat4.makeRotate ((toFloat rotation) / 10) (vec3 0 0 1)
         , offset =
             vec3 0 -1 0
         }
